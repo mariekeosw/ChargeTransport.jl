@@ -88,6 +88,7 @@ include("ct_physics.jl")
 
 export get_BEE, get_DOS, etaFunction, get_density
 export breaction!, bstorage!, reaction!, storage!, flux!
+export poisson_flux!, poisson_reaction!, poisson_breaction!
 export zeroVoltage
 export BeerLambert
 export storage!
@@ -113,6 +114,7 @@ export gridplot
 export set_contact!
 export compute_open_circuit_voltage
 export electroNeutralSolution
+export electroNeutralSolutionBisection, rhs_poisson_region
 export show_params, show_paramsoptical, trap_density
 export get_current_val, charge_density, integrated_density
 

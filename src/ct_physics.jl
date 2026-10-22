@@ -278,6 +278,22 @@ zeroVoltage(t) = 0.0
 
 ##########################################################
 ##########################################################
+#---------------------------------------------------------------------------------------
+# Used for poissonOnly = true, ipsi = 1 in that case
+#---------------------------------------------------------------------------------------
+poisson_breaction!(f, u, bnode, data) = poisson_breaction!(f, u, bnode, data, data.boundaryType[bnode.region])
+
+# ψ0 from electro-neutrality, stored in params.bψEQ before the solve (same entry that OhmicContactDirichlet reads)
+function poisson_breaction!(f, u, bnode, data, ::Type{OhmicContact})
+    boundary_dirichlet!(f, u, bnode, species = 1, region = bnode.region, value = data.params.bψEQ[bnode.region])
+    return
+end
+
+# no condition on ψ: natural homogeneous Neumann
+poisson_breaction!(f, u, bnode, data, ::Type{InterfaceNone}) = nothing
+#---------------------------------------------------------------------------------------
+
+
 """
 $(TYPEDSIGNATURES)
 Master breaction! function. This is the function which enters VoronoiFVM and hands over
@@ -290,100 +306,7 @@ breaction!(f, u, bnode, data) = breaction!(f, u, bnode, data, data.boundaryType[
 
 breaction!(f, u, bnode, data, ::Type{OhmicContact}) = breaction!(f, u, bnode, data, data.calculationType)
 
-# in case of equilibrium conditions, we choose the initial ohmic contact boundary model
-breaction!(f, u, bnode, data, ::Type{InEquilibrium}) = breaction!(f, u, bnode, data, OhmicContactRobin)
-
 breaction!(f, u, bnode, data, ::Type{OutOfEquilibrium}) = breaction!(f, u, bnode, data, data.ohmicContactModel)
-
-"""
-$(TYPEDSIGNATURES)
-
-Creates ohmic boundary conditions via a penalty approach with penalty parameter ``\\delta``.
-For example, the right-hand side for the electrostatic potential ``\\psi`` is implemented as
-
-``f[\\psi]  = -q/\\delta   ( (p - N_a) - (n - N_d) )``,
-
-assuming a bipolar semiconductor. In general, we have for some given charge number ``z_\\alpha``
-
-``f[\\psi] =  -q/\\delta  \\sum_\\alpha{ z_\\alpha  (n_\\alpha - C_\\alpha) },``
-
-where ``C_\\alpha`` corresponds to some doping w.r.t. the species ``\\alpha``.
-
-The boundary conditions for electrons and holes are dirichlet conditions, where
-
-`` \\varphi_{\\alpha} = U```
-
-with ``U`` as an applied voltage.
-"""
-function breaction!(f, u, bnode, data, ::Type{OhmicContactRobin})
-
-    params = data.params
-    paramsnodal = data.paramsnodal
-
-    ipsi = data.index_psi
-
-    # electrons and holes entering right hand-side for BC of ipsi
-    for icc in data.electricCarrierList         # Array{Int64, 1}
-
-        icc = data.chargeCarrierList[icc]  # Array{QType, 1}
-        ncc = get_density!(u, bnode, data, icc)
-
-        # subtract doping
-        f[ipsi] = f[ipsi] - params.chargeNumbers[icc] * (params.bDoping[icc, bnode.region])
-        # add charge carrier
-        f[ipsi] = f[ipsi] + params.chargeNumbers[icc] * ncc
-
-    end
-
-    # if ionic carriers are present
-    for iicc in data.ionicCarrierList # ∈ Array{IonicCarrier, 1}
-        # add ionic carriers only in defined regions (otherwise get NaN error)
-        if bnode.cellregions[1] ∈ iicc.regions    # bnode.cellregions = [bnode.region, 0] for outer boundary.
-            icc = iicc.ionicCarrier           # species number chosen by user
-            icc = data.chargeCarrierList[icc] # find correct index within chargeCarrierList (Array{QType, 1})
-
-            ncc = get_density!(u, bnode, data, icc)
-
-            # subtract doping
-            f[ipsi] = f[ipsi] - params.chargeNumbers[icc] * (params.bDoping[icc, bnode.region])
-            # add charge carrier
-            f[ipsi] = f[ipsi] + params.chargeNumbers[icc] * ncc
-
-        end
-
-    end
-    # if trap carriers are present
-    for iicc in data.trapCarrierList
-        # add trap carriers only in defined regions (otherwise get NaN error)
-        if bnode.cellregions[1] ∈ iicc.regions    # bnode.cellregions = [bnode.region, 0] for outer boundary.
-            icc = iicc.trapCarrier           # species number chosen by user
-            icc = data.chargeCarrierList[icc] # find correct index within chargeCarrierList (Array{QType, 1})
-
-            ncc = get_density!(u, bnode, data, icc)
-
-            # subtract doping
-            f[ipsi] = f[ipsi] - params.chargeNumbers[icc] * (params.bDoping[icc, bnode.region])
-            # add charge carrier
-            f[ipsi] = f[ipsi] + params.chargeNumbers[icc] * ncc
-
-        end
-    end
-
-    f[ipsi] = f[ipsi] - paramsnodal.doping[bnode.index]
-    f[ipsi] = - data.λ1 * 1 / tiny_penalty_value * data.constants.q * f[ipsi]
-
-    # electrons and holes boundary condition
-    iphin = data.bulkRecombination.iphin # integer index of φ_n
-    iphip = data.bulkRecombination.iphip # integer index of φ_p
-
-    Δu = params.contactVoltage[bnode.region] + data.contactVoltageFunction[bnode.region](bnode.time)
-
-    boundary_dirichlet!(f, u, bnode, species = iphin, region = bnode.region, value = Δu)
-    boundary_dirichlet!(f, u, bnode, species = iphip, region = bnode.region, value = Δu)
-    return
-
-end
-
 
 """
 $(TYPEDSIGNATURES)
@@ -423,256 +346,9 @@ function breaction!(f, u, bnode, data, ::Type{OhmicContactDirichlet})
 
 end
 
-"""
-$(TYPEDSIGNATURES)
-Creates Schottky boundary conditions. For the electrostatic potential we assume
-
-``\\psi = - \\phi_S/q + U, ``
-
-where  ``\\phi_S`` corresponds to a given value (non-negative Schottky barrier) and ``U`` to the applied voltage.
-The quantity ``\\phi_S`` needs to be specified in the main file.
-For electrons and holes we assume the following
-
-``f[n_\\alpha]  =  z_\\alpha q v_\\alpha (n_\\alpha - n_{\\alpha, 0})``,
-
-where ``v_{\\alpha}`` can be treated as a surface recombination mechanism and is given. The parameter
-``n_{\\alpha, 0}`` is the equilibrium density of the charge carrier ``\\alpha`` and can be
-calculated via
-
-``n_{\\alpha, 0}= N_\\alpha \\mathcal{F}_\\alpha \\Bigl( - z_\\alpha/ U_T (E_c - E_\\alpha) - \\phi_S) / q \\Bigr). ``
-
-"""
-
-function breaction!(f, u, bnode, data, ::Type{SchottkyContact})
-
-    params = data.params
-    paramsnodal = data.paramsnodal
-    ipsi = data.index_psi
-    iphin = data.bulkRecombination.iphin
-    Ec = params.bBandEdgeEnergy[iphin, bnode.region]
-
-    for icc in data.electricCarrierList       # Array{Int64, 1}
-
-        icc = data.chargeCarrierList[icc] # based on user index and regularity of solution quantities or integers are used
-
-        get_DOS!(icc, bnode, data);  get_BEE!(icc, bnode, data)
-        Ni = data.tempDOS1[icc]
-        Ei = data.tempBEE1[icc]
-        etaFix = - params.chargeNumbers[icc] / (data.constants.k_B * params.temperature) * (((Ec - Ei) - params.SchottkyBarrier[bnode.region]))
-
-        ncc = get_density!(u, bnode, data, icc)
-
-        f[icc] = params.chargeNumbers[icc] * data.constants.q * params.bVelocity[icc, bnode.region] * (ncc - Ni * data.F[icc](etaFix))
-
-    end
-
-    # function evaluation causes allocation!!!
-    Δu = params.contactVoltage[bnode.region] + data.contactVoltageFunction[bnode.region](bnode.time)
-
-    ipsiIndex = length(data.chargeCarrierList) + 1 # This is necessary, since passing something other than an Integer in boundary_dirichlet!() causes allocations
-    boundary_dirichlet!(f, u, bnode, species = ipsiIndex, region = bnode.region, value = (- (params.SchottkyBarrier[bnode.region] - Ec) / data.constants.q) + Δu)
-    return
-
-end
-
-###########################################################################
-###########################################################################
-"""
-$(TYPEDSIGNATURES)
-A mixed Schottky-Ohmic boundary type condition, where we impose on the electric potential (Schottky)
-
-``\\psi = - \\phi_S/q + U, ``
-
-with  ``\\phi_S`` as given value (non-negative Schottky barrier) and ``U`` to the applied voltage.
-The quantity ``\\phi_S`` needs to be specified in the main file.
-For electrons and holes we assume the following (Ohmic)
-
-`` \\varphi_{\\alpha} = U``.
-"""
-
-function breaction!(f, u, bnode, data, ::Type{MixedOhmicSchottkyContact})
-
-    iphin = data.bulkRecombination.iphin # integer index of φ_n
-    iphip = data.bulkRecombination.iphip # integer index of φ_p
-    ipsiIndex = length(data.chargeCarrierList) + 1 # This is necessary, since passing something other than an Integer in boundary_dirichlet!() causes allocations
-
-    params = data.params
-    Ec = params.bBandEdgeEnergy[iphin, bnode.region]
-    Δu = params.contactVoltage[bnode.region] + data.contactVoltageFunction[bnode.region](bnode.time)
-
-
-    # electric potential BC
-    boundary_dirichlet!(f, u, bnode, species = ipsiIndex, region = bnode.region, value = (- (params.SchottkyBarrier[bnode.region] - Ec) / data.constants.q) + Δu)
-
-    # electrons and holes boundary condition
-    boundary_dirichlet!(f, u, bnode, species = iphin, region = bnode.region, value = Δu)
-    boundary_dirichlet!(f, u, bnode, species = iphip, region = bnode.region, value = Δu)
-    return
-
-end
-
-###########################################################################
-###########################################################################
-
-"""
-$(TYPEDSIGNATURES)
-Creates Schottky boundary conditions with additional lowering which are modelled as
-
-`` \\psi = - \\phi_S/q  + \\sqrt{ -\\frac{ q  \\nabla_{\\boldsymbol{\\nu}} \\psi_\\mathrm{R}}{4\\pi \\varepsilon_\\mathrm{i}}} + U``,
-
-where `` \\psi_\\mathrm{R}`` denotes the electric potential with standard Schottky contacts and the same space charge density as `` \\psi`` and where ``\\varepsilon_\\mathrm{i}}}`` corresponds to the image force dielectric constant.
-
-To solve for this additional boundary conditions the projected gradient ``\\nabla_{\\boldsymbol{\\nu}} \\psi_\\mathrm{R} `` is stored within a boundary species and calculated in the method generic_operator!().
-"""
-function breaction!(f, u, bnode, data, ::Type{SchottkyBarrierLowering})
-
-    params = data.params
-    ipsi = data.index_psi
-    iphin = data.bulkRecombination.iphin
-    Ec = params.bBandEdgeEnergy[iphin, bnode.region]
-    ipsiStandard = data.barrierLoweringInfo.ipsiStandard
-    ipsiGrad = data.barrierLoweringInfo.ipsiGrad
-
-    q = data.constants.q
-
-    if data.calculationType == OutOfEquilibrium
-        for icc in data.electricCarrierList       # Array{Int64, 1}
-
-            icc = data.chargeCarrierList[icc] # based on user index and regularity of solution quantities or integers are used
-            ncc = get_density!(u, bnode, data, icc)
-
-            f[icc] = params.chargeNumbers[icc] * q * params.bVelocity[icc, bnode.region] * (ncc - params.bDensityEQ[icc, bnode.region])
-
-        end
-    end
-
-    # function evaluation causes allocation!!!
-    Δu = params.contactVoltage[bnode.region] + data.contactVoltageFunction[bnode.region](bnode.time)
-
-    if u[ipsiGrad] < 0
-        PsiS = sqrt(- q / (4 * pi * params.dielectricConstantImageForce[bnode.cellregions[1]]) * u[ipsiGrad]) #bnode.cellregions[1] ∈ iicc.regions    # bnode.cellregions = [bnode.region, 0] for outer boundary.
-    else
-        PsiS = 0.0
-    end
-
-    f[ipsiStandard] = 1 / tiny_penalty_value * (u[ipsi] + (params.SchottkyBarrier[bnode.region] - Ec) / q - PsiS - Δu)
-    f[ipsi] = 1 / tiny_penalty_value * (u[ipsiStandard] + (params.SchottkyBarrier[bnode.region] - Ec) / q - Δu)
-    return
-
-end
-
 
 # This breaction! function is chosen when no interface model is chosen.
 breaction!(f, u, bnode, data, ::Type{InterfaceNone}) = emptyFunction()
-
-
-function breaction!(f, u, bnode, data, ::Type{InterfaceRecombination})
-
-    params = data.params
-    (; q, k_B) = data.constants
-
-    if data.calculationType == InEquilibrium
-        return
-    end
-
-    # indices (∈ IN) of electron and hole quasi Fermi potentials specified by user (passed through recombination)
-    iphin = data.bulkRecombination.iphin # integer index of φ_n
-    iphip = data.bulkRecombination.iphip # integer index of φ_p
-
-    n = get_density!(u, bnode, data, iphin)
-    p = get_density!(u, bnode, data, iphip)
-
-    exponentialTerm = exp((q * u[iphin] - q * u[iphip]) / (k_B * params.temperature))
-    excessDensTerm = n * p * (1.0 - exponentialTerm)
-
-    if params.recombinationSRHvelocity[iphip, bnode.region] ≈ 0.0
-        vp = 1.0e30
-    else
-        vp = 1.0 / params.recombinationSRHvelocity[iphip, bnode.region]
-    end
-
-    if params.recombinationSRHvelocity[iphin, bnode.region] ≈ 0.0
-        vn = 1.0e30
-    else
-        vn = 1.0 / params.recombinationSRHvelocity[iphin, bnode.region]
-    end
-
-    kernelSRH = 1.0 / (vp * (n + params.bRecombinationSRHTrapDensity[iphin, bnode.region]) + vn * (p + params.bRecombinationSRHTrapDensity[iphip, bnode.region]))
-
-    for icc in data.electricCarrierList
-        icc = data.chargeCarrierList[icc]
-        f[icc] = q * params.chargeNumbers[icc] * kernelSRH * excessDensTerm
-    end
-
-    return
-end
-
-###########################################################################
-###########################################################################
-
-
-"""
-$(TYPEDSIGNATURES)
-Creates boundary conditions for gate contacts. A Robin boundary condition is applied to the electrostatic potential
-    
-``\\varepsilon_\\mathrm{s} \\nabla \\psi \\cdot \\nu + \\frac{\\varepsilon_\\mathrm{ox}}{d_\\mathrm{ox}} (\\psi - U_G) = Q_{ss}``,
-
-where ``\\varepsilon_\\mathrm{ox}`` denotes the absolute dielectric permittivity of the oxide and ``d_\\mathrm{ox}`` the thickness of the oxide.
-The term ``Q_{ss}`` corresponds to the surface charge density at the gate contact.
-
-For the quasi Fermi potentials, homogeneous Neumann boundary conditions are implemented.
-
-Note that an additional reference voltage ``U_{ref}`` can be absorbed into the surface charge term.
-This leads to an effective surface charge density
-
-``Q_{ss}^{'} = Q_{ss} + \\frac{\\varepsilon_\\mathrm{ox}}{d_\\mathrm{ox}} U_{ref}``.
-
-Equivalently, in terms of surface state density,
-
-``Q_{ss}^{'} = q N_{ss}^{'} ``.
-"""
-
-function breaction!(f, u, bnode, data, ::Type{GateContact})
-
-    params = data.params
-    ipsi = data.index_psi
-
-    # Homogeneous Neumann boundary conditions for electrons and holes by default
-    # Robin boundary condition for the electrostatic potential
-    f[ipsi] = (params.dielectricConstantOxideGate[bnode.region] / params.thicknessOxideGate[bnode.region]) * (u[ipsi] - params.contactVoltage[bnode.region]) - params.surfaceChargeDensityGate[bnode.region]
-
-    return
-end
-
-##########################################################
-##########################################################
-
-"""
-$(TYPEDSIGNATURES)
-Generic operator to save the projected gradient of electric potential
-(for system with standard Schottky contacts). Note that this currently
-only working in one dimension!
-
-"""
-function generic_operator!(f, u, fvmsys, data)
-
-    f .= 0
-
-    coord = fvmsys.grid[Coordinates]
-    n = length(coord)
-    barrierLoweringInfo = fvmsys.physics.data.barrierLoweringInfo
-    ipsiStandard = barrierLoweringInfo.ipsiStandard
-    ipsiGrad = barrierLoweringInfo.ipsiGrad
-
-    idx = barrierLoweringInfo.idx
-
-    f[idx[ipsiGrad, 1]] = u[idx[ipsiGrad, 1]] - (-1) * (u[idx[ipsiStandard, 2]] - u[idx[ipsiStandard, 1]]) / (coord[2] - coord[1])
-    f[idx[ipsiGrad, n]] = u[idx[ipsiGrad, n]] - (u[idx[ipsiStandard, n]] - u[idx[ipsiStandard, n - 1]]) / (coord[n] - coord[n - 1])
-    return
-
-
-end
-
 
 ##########################################################
 ##########################################################
@@ -720,47 +396,6 @@ function reaction!(f, u, node, data)
     reaction!(f, u, node, data, data.calculationType)
     data.customReaction!(f, u, node, data)
     return nothing
-end
-"""
-$(TYPEDSIGNATURES)
-Reaction in case of equilibrium, i.e. no generation and recombination is considered.
-"""
-function reaction!(f, u, node, data, ::Type{InEquilibrium})
-
-    ipsi = data.index_psi
-    # RHS of Poisson
-    RHSPoisson!(f, u, node, data, ipsi)
-    if data.barrierLoweringInfo.BarrierLoweringOn == BarrierLoweringOn
-        ipsiStandard = data.barrierLoweringInfo.ipsiStandard
-        RHSPoisson!(f, u, node, data, ipsiStandard)
-    end
-
-    # zero reaction term for all icc (stability purpose)
-    for icc in data.electricCarrierList # Array{Int64, 1}
-        icc = data.chargeCarrierList[icc] # Array{QType 1}
-        f[icc] = u[icc]
-    end
-
-    for iicc in data.ionicCarrierList # ∈ Array{IonicCarrier, 1}
-        # add ionic carriers only in defined regions (otherwise get NaN error)
-        if node.region ∈ iicc.regions
-            icc = iicc.ionicCarrier           # species number chosen by user
-            icc = data.chargeCarrierList[icc] # find correct index within chargeCarrierList (Array{QType, 1})
-
-            f[icc] = u[icc]
-        end
-    end
-    for iicc in data.trapCarrierList
-        # add trap carriers only in defined regions (otherwise get NaN error)
-        if node.region ∈ iicc.regions
-            icc = iicc.trapCarrier            # species number chosen by user
-            icc = data.chargeCarrierList[icc] # find correct index within chargeCarrierList (Array{QType, 1})
-
-            f[icc] = u[icc]
-        end
-    end
-
-    return
 end
 
 function StimulatedRecombination(u, node, data)
@@ -891,6 +526,32 @@ function addGeneration!(f, u, node, data)
     return
 end
 
+#---------------------------------------------------------------------------------------
+# Used for poissonOnly = true, ipsi = 1 in that case
+#---------------------------------------------------------------------------------------
+function poisson_reaction!(f, u, node, data)
+    (; k_B, q) = data.constants
+    params = data.params
+
+    for icc in data.electricCarrierList
+        icc = data.chargeCarrierList[icc]
+        get_DOS!(icc, node, data) # density of states
+        get_BEE!(icc, node, data) # band edge energies
+
+        # φ = 0 in equilibrium, u[1] = ψ (index_psi would be 3 in the full system)
+        eta = params.chargeNumbers[icc] / (k_B * params.temperature) * (data.tempBEE1[icc] - q * u[1])
+        ncc = data.tempDOS1[icc] * data.F[icc](eta)
+
+        f[1] = f[1] - params.chargeNumbers[icc] * params.doping[icc, node.region]
+        f[1] = f[1] + params.chargeNumbers[icc] * ncc
+    end
+
+    f[1] = f[1] - data.paramsnodal.doping[node.index]
+    f[1] = -q * f[1]            # λ1 = 1 here, no embedding needed
+    return
+end
+#---------------------------------------------------------------------------------------
+
 """
 $(TYPEDSIGNATURES)
 Function which builds right-hand side of Poisson equation, i.e. which builds
@@ -1004,64 +665,6 @@ function reaction!(f, u, node, data, ::Type{OutOfEquilibrium})
 
 end
 
-
-"""
-$(SIGNATURES)
-Compute trap densities for a given trap energy.
-[Currently, only done for the Boltzmann statistics and for region dependent parameters.]
-"""
-function trap_density(icc, ireg, params, Et, constants)
-
-    return params.densityOfStates[icc, ireg] * exp(params.chargeNumbers[icc] * (params.bandEdgeEnergy[icc, ireg] - Et) / (constants.k_B * params.temperature))
-end
-
-# The generation rate ``G``, which occurs in the right-hand side of the
-# continuity equations with a uniform generation rate.
-function generation(data, node, ::Type{GenerationUniform})
-
-    return data.λ2 * data.params.generationUniform[node.region]
-end
-
-
-# The generation rate ``G``, which occurs in the right-hand side of the
-# continuity equations obeying the Beer-Lambert law.
-# only works in 1D till now; adjust node, when multidimensions
-function generation(data, node, ::Type{GenerationBeerLambert})
-
-    params = data.params
-    ireg = node.region
-    node = node.coord[node.index]
-
-    return data.λ2 .* params.generationIncidentPhotonFlux[ireg] .* params.generationAbsorption[ireg] .* exp.(- params.invertedIllumination .* params.generationAbsorption[ireg] .* (node .- params.generationPeak))
-
-end
-
-
-# The generation rate ``G``, which occurs in the right-hand side of the
-# continuity equations with a user defined generation rate.
-# only works in 1D till now; adjust node, when multidimensions
-function generation(data, node, ::Type{GenerationUserDefined})
-
-    return data.λ2 .* data.generationData[node.index]
-
-end
-
-generation(data, node, ::Type{GenerationNone}) = 0.0
-
-"""
-$(SIGNATURES)
-Beer-Lambert function for the visualization of this type of photogeneration profile.
-"""
-
-function BeerLambert(ctsys, ireg, node)
-
-    data = ctsys.fvmsys.physics.data
-    params = data.params
-
-    return params.generationIncidentPhotonFlux[ireg] .* params.generationAbsorption[ireg] .* exp.(- params.invertedIllumination .* params.generationAbsorption[ireg] .* (node .- params.generationPeak))
-
-end
-
 ##########################################################
 ##########################################################
 
@@ -1077,7 +680,6 @@ storage!(f, u, node, data, ::Type{Stationary}) = emptyFunction()
 
 storage!(f, u, node, data, ::Type{Transient}) = storage!(f, u, node, data, data.calculationType)
 
-storage!(f, u, node, data, ::Type{InEquilibrium}) = emptyFunction()
 """
 $(TYPEDSIGNATURES)
 The storage term for time-dependent problems.
@@ -1152,12 +754,12 @@ flux!(f, u, edge, data) = flux!(f, u, edge, data, data.calculationType)
 
 
 # Finite difference discretization of the displacement flux.
-function displacementFlux!(f, u, edge, data)
+function displacementFlux!(f, u, edge, data, ipsi = data.index_psi)
 
     params = data.params
     paramsnodal = data.paramsnodal
 
-    ipsi = data.index_psi
+    #ipsi = data.index_psi moved, now function argument, so it is usable for poisson equilibrium
     nodel = edge.node[2]   # left node
     nodek = edge.node[1]   # right node
     ireg = edge.region
@@ -1176,12 +778,11 @@ function displacementFlux!(f, u, edge, data)
 
 end
 
-
-function flux!(f, u, edge, data, ::Type{InEquilibrium})
-    ## discretization of the displacement flux (LHS of Poisson equation)
-    displacementFlux!(f, u, edge, data)
-    return
-end
+#---------------------------------------------------------------------------------------
+# Used for poissonOnly = true, ipsi = 1 in that case
+#---------------------------------------------------------------------------------------
+poisson_flux!(f, u, edge, data) = displacementFlux!(f, u, edge, data, 1)
+#---------------------------------------------------------------------------------------
 
 function flux!(f, u, edge, data, ::Type{OutOfEquilibrium})
 
