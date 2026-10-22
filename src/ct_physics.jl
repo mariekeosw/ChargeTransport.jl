@@ -339,9 +339,18 @@ function breaction!(f, u, bnode, data, ::Type{OhmicContactDirichlet})
     Δu = params.contactVoltage[bnode.region] + data.contactVoltageFunction[bnode.region](bnode.time)
     ψ0 = params.bψEQ[bnode.region]
 
-    boundary_dirichlet!(f, u, bnode, species = iphin, region = bnode.region, value = Δu)
-    boundary_dirichlet!(f, u, bnode, species = iphip, region = bnode.region, value = Δu)
-    boundary_dirichlet!(f, u, bnode, species = ipsi, region = bnode.region, value = ψ0 + Δu)
+    if bnode.cellregions[1] ∈ data.params.regionsContinuity && bnode.cellregions[1] ∈ data.params.regionsPoisson
+        boundary_dirichlet!(f, u, bnode, species = iphin, region = bnode.region, value = Δu)
+        boundary_dirichlet!(f, u, bnode, species = iphip, region = bnode.region, value = Δu)
+        boundary_dirichlet!(f, u, bnode, species = ipsi, region = bnode.region, value = ψ0 + Δu)
+    elseif bnode.cellregions[1] ∈ data.params.regionsPoisson && bnode.cellregions[1] ∉ data.params.regionsContinuity
+        boundary_dirichlet!(f, u, bnode, species = ipsi, region = bnode.region, value = ψ0 + Δu)
+    else
+        error(
+            "Boundary condition not implemented for this combination of regionsContinuity and regionsPoisson."
+        )
+    end
+
     return
 
 end
@@ -530,24 +539,33 @@ end
 # Used for poissonOnly = true, ipsi = 1 in that case
 #---------------------------------------------------------------------------------------
 function poisson_reaction!(f, u, node, data)
-    (; k_B, q) = data.constants
-    params = data.params
 
-    for icc in data.electricCarrierList
-        icc = data.chargeCarrierList[icc]
-        get_DOS!(icc, node, data) # density of states
-        get_BEE!(icc, node, data) # band edge energies
+    if node.region ∈ data.params.regionsContinuity && node.region ∈ data.params.regionsPoisson
 
-        # φ = 0 in equilibrium, u[1] = ψ (index_psi would be 3 in the full system)
-        eta = params.chargeNumbers[icc] / (k_B * params.temperature) * (data.tempBEE1[icc] - q * u[1])
-        ncc = data.tempDOS1[icc] * data.F[icc](eta)
+        (; k_B, q) = data.constants
+        params = data.params
 
-        f[1] = f[1] - params.chargeNumbers[icc] * params.doping[icc, node.region]
-        f[1] = f[1] + params.chargeNumbers[icc] * ncc
+        for icc in data.electricCarrierList
+            icc = data.chargeCarrierList[icc]
+            get_DOS!(icc, node, data) # density of states
+            get_BEE!(icc, node, data) # band edge energies
+
+            # φ = 0 in equilibrium, u[1] = ψ (index_psi would be 3 in the full system)
+            eta = params.chargeNumbers[icc] / (k_B * params.temperature) * (data.tempBEE1[icc] - q * u[1])
+            ncc = data.tempDOS1[icc] * data.F[icc](eta)
+
+            f[1] = f[1] - params.chargeNumbers[icc] * params.doping[icc, node.region]
+            f[1] = f[1] + params.chargeNumbers[icc] * ncc
+        end
+
+        f[1] = -q * f[1]
+
+    elseif node.region ∈ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
+        # no RHS at all
+    else
+        error("poisson_reaction!: region must be in regionsPoisson (with or without regionsContinuity).")
     end
 
-    f[1] = f[1] - data.paramsnodal.doping[node.index]
-    f[1] = -q * f[1]            # λ1 = 1 here, no embedding needed
     return
 end
 #---------------------------------------------------------------------------------------
@@ -558,11 +576,6 @@ Function which builds right-hand side of Poisson equation, i.e. which builds
 the space charge density.
 """
 function RHSPoisson!(f, u, node, data, ipsi)
-
-    ###########################################################
-    ####         right-hand side of nonlinear Poisson      ####
-    ####         equation (space charge density)           ####
-    ###########################################################
 
     # electrons and holes entering right hand-side of Poisson in each layer
     for icc in data.electricCarrierList          # Array{Int64, 1}
@@ -575,37 +588,9 @@ function RHSPoisson!(f, u, node, data, ipsi)
 
     end
 
-    for iicc in data.ionicCarrierList # ∈ Array{IonicCarrier, 1}
-        # add ionic carriers only in defined regions (otherwise get NaN error)
-        if node.region ∈ iicc.regions
+    f[ipsi] = - data.constants.q * f[ipsi]
 
-            icc = iicc.ionicCarrier           # species number chosen by user
-            icc = data.chargeCarrierList[icc] # find correct index within chargeCarrierList (Array{QType, 1})
-            ncc = get_density!(u, node, data, icc)
-
-            f[ipsi] = f[ipsi] - data.params.chargeNumbers[icc] * (data.params.doping[icc, node.region])  # subtract doping
-            f[ipsi] = f[ipsi] + data.params.chargeNumbers[icc] * ncc   # add charge carrier
-        end
-    end
-    for iicc in data.trapCarrierList
-        # add trap carriers only in defined regions (otherwise get NaN error)
-        if node.region ∈ iicc.regions
-
-            icc = iicc.trapCarrier           # species number chosen by user
-            icc = data.chargeCarrierList[icc] # find correct index within chargeCarrierList (Array{QType, 1})
-
-            ncc = get_density!(u, node, data, icc)
-
-            f[ipsi] = f[ipsi] - data.params.chargeNumbers[icc] * (data.params.doping[icc, node.region])  # subtract doping
-            f[ipsi] = f[ipsi] + data.params.chargeNumbers[icc] * ncc   # add charge carrier
-        end
-    end
-
-    f[ipsi] = f[ipsi] - data.paramsnodal.doping[node.index]
-    f[ipsi] = - data.constants.q * data.λ1 * f[ipsi]
-
-    return
-
+    return nothing
 end
 
 """
@@ -618,12 +603,15 @@ function RHSContinuityEquations!(f, u, node, data)
     if data.bulkRecombination.bulk_recomb
         addRecombination!(f, u, node, data)
     end
+
+    # not needed for now?
     # dependent on user information concerning trap dynamics
-    addTrapCaptureEscape!(f, u, node, data)
+    #addTrapCaptureEscape!(f, u, node, data)
     # dependent on user information concerning laser model
-    addStimulatedRecombination!(f, u, node, data, data.laserModel)
+    #addStimulatedRecombination!(f, u, node, data, data.laserModel)
     # dependent on user information concerncing generation
-    addGeneration!(f, u, node, data)
+    #addGeneration!(f, u, node, data)
+
     return nothing
 
 end
@@ -646,20 +634,27 @@ that the electron index is 1 and the hole index is 2.
 function reaction!(f, u, node, data, ::Type{OutOfEquilibrium})
 
     ipsi = data.index_psi
-    RHSPoisson!(f, u, node, data, ipsi)               # RHS of Poisson
-    if data.barrierLoweringInfo.BarrierLoweringOn == BarrierLoweringOn # additional Poisson in case of Barrier Lowering
-        ipsiStandard = data.barrierLoweringInfo.ipsiStandard
-        RHSPoisson!(f, u, node, data, ipsiStandard)
+
+    if node.region ∈ data.params.regionsContinuity && node.region ∈ data.params.regionsPoisson
+
+        RHSPoisson!(f, u, node, data, ipsi)
+
+        # First, set RHS to zero for all icc - why do we need that?
+        for icc in eachindex(data.chargeCarrierList) # Array{Int61, 1}
+            icc = data.chargeCarrierList[icc]   # Array{QType, 1}
+            f[icc] = 0.0
+        end
+
+        RHSContinuityEquations!(f, u, node, data)
+
+    elseif node.region ∈ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
+
+        # no RHS at all
+
+    else
+        error("reaction!: region must be in regionsPoisson (with or without regionsContinuity).")
     end
 
-    # First, set RHS to zero for all icc
-    for icc in eachindex(data.chargeCarrierList) # Array{Int61, 1}
-        icc = data.chargeCarrierList[icc]   # Array{QType, 1}
-        f[icc] = 0.0
-    end
-
-    # Then, add RHS of continuity equations based on user information
-    RHSContinuityEquations!(f, u, node, data) # RHS of Charge Carriers with special treatment of recombination
 
     return
 
@@ -781,21 +776,42 @@ end
 #---------------------------------------------------------------------------------------
 # Used for poissonOnly = true, ipsi = 1 in that case
 #---------------------------------------------------------------------------------------
-poisson_flux!(f, u, edge, data) = displacementFlux!(f, u, edge, data, 1)
+function poisson_flux!(f, u, edge, data)
+
+    if node.region ∈ data.params.regionsContinuity && node.region ∈ data.params.regionsPoisson
+        displacementFlux!(f, u, edge, data, 1)
+    elseif node.region ∈ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
+        displacementFlux!(f, u, edge, data)
+    else
+        error("flux!: region must be in regionsPoisson (with or without regionsContinuity).")
+    end
+
+    return
+end
 #---------------------------------------------------------------------------------------
 
 function flux!(f, u, edge, data, ::Type{OutOfEquilibrium})
 
-    ## discretization of the displacement flux (LHS of Poisson equation)
-    displacementFlux!(f, u, edge, data)
 
-    for icc in data.electricCarrierList   # correct index of electric carriers of Type Int64
-        chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
-    end
+    if node.region ∈ data.params.regionsContinuity && node.region ∈ data.params.regionsPoisson
 
-    for icc in data.ionicCarrierList
-        icc = icc.ionicCarrier       # correct index number chosen by user of Type Int64
-        chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
+        # discretization of the displacement flux (LHS of Poisson equation)
+        displacementFlux!(f, u, edge, data)
+
+        # discretization of the carrier fluxes
+        for icc in data.electricCarrierList
+            chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
+        end
+
+    elseif node.region ∈ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
+
+        # discretization of the displacement flux (LHS of Poisson equation)
+        displacementFlux!(f, u, edge, data)
+
+        # no carrier fluxes
+
+    else
+        error("flux!: region must be in regionsPoisson (with or without regionsContinuity).")
     end
 
     return

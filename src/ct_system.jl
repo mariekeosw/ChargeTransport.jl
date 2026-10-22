@@ -554,6 +554,16 @@ mutable struct Params
     ####                   number of regions                   ####
     ###############################################################
     """
+    Regions in which the Poisson equation is solved.
+    """
+    regionsPoisson::Array{Int64, 1}
+
+    """
+    Regions in which the continuity equations of the charge carriers are solved.
+    """
+    regionsContinuity::Array{Int64, 1}
+
+    """
     A region dependent dielectric constant.
     """
     dielectricConstant::Array{Float64, 1}
@@ -677,6 +687,9 @@ function Params(numberOfRegions, numberOfBoundaryRegions, numberOfCarriers)
     ###############################################################
     ####                   number of regions                   ####
     ###############################################################
+    params.regionsPoisson = collect(1:numberOfRegions)
+    params.regionsContinuity = collect(1:numberOfRegions)
+
     params.dielectricConstant = ones(Float64, numberOfRegions)
     params.dielectricConstantImageForce = zeros(Float64, numberOfRegions)
     params.generationUniform = zeros(Float64, numberOfRegions)
@@ -1447,69 +1460,12 @@ function build_system(grid, data, ::Type{ContQF}; kwargs...)
     # put all non-ionic and non-trap carriers present everywhere
     for icc in data.chargeCarrierList
         if (icc ∉ ionicCarrierListHelp) && (icc ∉ trapCarrierListHelp)
-            enable_species!(ctsys, icc, 1:data.params.numberOfRegions)
+            enable_species!(ctsys, icc, data.params.regionsContinuity)
         end
     end
-
-    q = data.constants.q
-    k_B = data.constants.k_B
-    T = data.params.temperature
-
-    # if ionic carriers are present
-    for iicc in data.ionicCarrierList
-        enable_species!(ctsys, iicc.ionicCarrier, iicc.regions)
-
-        for ireg in iicc.regions
-
-            icc = iicc.ionicCarrier # species number chosen by user
-            iphin = data.bulkRecombination.iphin # integer index of φ_n
-            iphip = data.bulkRecombination.iphip # integer index of φ_p
-
-            ## in case user did not define any energy, give some suitable initial guess
-            if data.params.bandEdgeEnergy[icc, ireg] == 0.0 && ireg > 1
-
-                ## give some initial value of ionic energy level
-                En1 = data.params.bandEdgeEnergy[iphin, ireg - 1]
-                Ep1 = data.params.bandEdgeEnergy[iphip, ireg - 1]
-                Nn1 = data.params.densityOfStates[iphin, ireg - 1]
-                Np1 = data.params.densityOfStates[iphip, ireg - 1]
-                C1 = data.params.doping[iphin, ireg - 1] - data.params.doping[iphip, ireg - 1]
-                Nintr1 = sqrt(Nn1 * Np1 * exp((En1 - Ep1) / (-k_B * T)))
-
-                psi1 = (En1 + Ep1) / (2 * q) - 0.5 * (k_B * T / q) * log(Nn1 / Np1) + (k_B * T / q) * asinh(C1 / (2 * Nintr1))
-                ###
-                En2 = data.params.bandEdgeEnergy[iphin, ireg + 1]
-                Ep2 = data.params.bandEdgeEnergy[iphip, ireg + 1]
-                Nn2 = data.params.densityOfStates[iphin, ireg + 1]
-                Np2 = data.params.densityOfStates[iphip, ireg + 1]
-                C2 = data.params.doping[iphin, ireg + 1] - data.params.doping[iphip, ireg + 1]
-                Nintr2 = sqrt(Nn2 * Np2 * exp((En2 - Ep2) / (-k_B * T)))
-
-                psi2 = (En2 + Ep2) / (2 * q) - 0.5 * (k_B * T / q) * log(Nn2 / Np2) + (k_B * T / q) * asinh(C2 / (2 * Nintr2))
-
-                Na = data.params.densityOfStates[icc, ireg]
-                za = data.params.chargeNumbers[icc]
-                Ca = data.params.doping[icc, ireg]
-
-                Ea = trunc((k_B * T / za * log((Ca / Na) / (1 - Ca / Na)) + q * (psi1 + psi2) / 2) / q, digits = 3) * q
-
-                data.params.bandEdgeEnergy[icc, ireg] = Ea
-
-            end
-
-        end
-
-    end
-
-    # if traps are present
-    for iicc in data.trapCarrierList
-        enable_species!(ctsys, iicc.trapCarrier, iicc.regions)
-    end
-
-    # we need no loop for interface carriers, since in this case there are not present.
 
     # enable lastly the electric potential on whole domain
-    enable_species!(ctsys, data.index_psi, 1:data.params.numberOfRegions)
+    enable_species!(ctsys, data.index_psi, data.params.regionsPoisson)
 
     ######################################
     # Fill in boundary parameters. By default, we set the boundary values the same as the adjacent inner cell.
