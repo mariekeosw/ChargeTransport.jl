@@ -562,6 +562,8 @@ function poisson_reaction!(f, u, node, data)
 
     elseif node.region ∈ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
         # no RHS at all
+    elseif node.region ∉ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
+        # no RHS at all
     else
         error("poisson_reaction!: region must be in regionsPoisson (with or without regionsContinuity).")
     end
@@ -781,7 +783,9 @@ function poisson_flux!(f, u, edge, data)
     if edge.region ∈ data.params.regionsContinuity && edge.region ∈ data.params.regionsPoisson
         displacementFlux!(f, u, edge, data, 1)
     elseif edge.region ∈ data.params.regionsPoisson && edge.region ∉ data.params.regionsContinuity
-        displacementFlux!(f, u, edge, data)
+        displacementFlux!(f, u, edge, data, 1)
+    elseif edge.region ∉ data.params.regionsPoisson && edge.region ∉ data.params.regionsContinuity
+        # no flux at all
     else
         error("flux!: region must be in regionsPoisson (with or without regionsContinuity).")
     end

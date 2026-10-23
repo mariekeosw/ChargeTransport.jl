@@ -1835,12 +1835,29 @@ function _equilibrium_solve_poisson!(ctsys::System; control = control, verbose =
     # Calculate psi0 via Bisection method
     psi0 = electroNeutralSolutionBisection(ctsys) # new function
 
+    # This is now handled within electroNeutralSolutionBisection(ctsys)
     # Store psi0 for all boundary faces in params.bψEQ
-    bfaceregions = grid[BFaceRegions]
-    for ibface in 1:ExtendableGrids.num_bfaces(grid)
-        ibreg = bfaceregions[ibface]
-        params.bψEQ[ibreg] = psi0[bnode[1, ibface]]
-    end
+    #bfaceregions = grid[BFaceRegions]
+    #for ibface in 1:ExtendableGrids.num_bfaces(grid)
+    #    ibreg = bfaceregions[ibface]
+    #    @show ibreg
+    #    params.bψEQ[ibreg] = psi0[bnode[1, ibface]]
+    #    @show psi0[bnode[1, ibface]]
+    #end
+
+    # das kann ich doch vereinfachen
+    # ich brauche das ja nur für die ohmischen kontakte
+    # das würde ich gerne manual machen
+
+    # boundary region 2, reion 4, p kontakt
+    #params.bψEQ[2] = psi0[4]
+    #params.bψEQ[x] = psi0[4] # das ist die neue boundry regions für oben
+
+    # boundary region 3, reion 8, n kontakt
+    #params.bψEQ[3] = psi0[8]
+    #params.bψEQ[x] = psi0[3] # das ist die neue boundry regions für oben
+
+    #-> das muss aber schon in electroNeutralSolutionBisection() passieren weil da ist psi(0) ja nur abhängig von regions
 
     # We use a smaller system with N unknowns for the equilibrium solution
     eqsys = poisson_system(ctsys)  # new function
@@ -2058,13 +2075,44 @@ function electroNeutralSolutionBisection(ctsys)
     dopingAbs = zeros(num_cellregions(grid))
 
     # solve roots problem for every region separated
+    #for ireg in 1:num_cellregions(grid)
+    #    psi0Values[ireg] = find_zero(ψ -> rhs_poisson_region(ctsys, ireg, ψ), (a, b), Roots.Bisection())
+    #    dopingAbs[ireg] = abs(params.doping[iphin, ireg] - params.doping[iphip, ireg]) # doping strength
+    #end
+
+    # insulating regions: no mobile charge, no doping -> electroneutral potential undefined
+    insulatingRegions = setdiff(params.regionsPoisson, params.regionsContinuity)
+
     for ireg in 1:num_cellregions(grid)
-        psi0Values[ireg] = find_zero(ψ -> rhs_poisson_region(ctsys, ireg, ψ), (a, b), Roots.Bisection())
-        dopingAbs[ireg] = abs(params.doping[iphin, ireg] - params.doping[iphip, ireg]) # doping strength
+
+        if ireg in insulatingRegions
+            @show ireg
+            # arbitrary but reasonable guess 0, dopingAbs = -1 so that any semiconductor region
+            # wins at shared (interface) nodes, see the node loop below.
+            psi0Values[ireg] = 0.0
+            dopingAbs[ireg] = -1.0
+        else
+            # solve roots problem for every region separated
+            psi0Values[ireg] = find_zero(ψ -> rhs_poisson_region(ctsys, ireg, ψ), (a, b), Roots.Bisection())
+            dopingAbs[ireg] = abs(params.doping[iphin, ireg] - params.doping[iphip, ireg])
+        end
+
     end
 
+    # we set bψEQ manually here, ist aber sehr hard-coded!!!
+    # !!! needs to be changed !!!
+    # boundary region 2,4,6 and value from region 4, p kontakt
+    params.bψEQ[2] = psi0Values[4] # dirichlet next to p-doped region
+    params.bψEQ[4] = psi0Values[4] # dirichlet next to air region
+    params.bψEQ[6] = psi0Values[4] # dirichlet next to sini region
+
+    # boundary regions 3,5,7 and value from region 8, n kontakt
+    params.bψEQ[3] = psi0Values[8] # dirichlet next to p-doped region
+    params.bψEQ[5] = psi0Values[8] # dirichlet next to air region
+    params.bψEQ[7] = psi0Values[8] # dirichlet next to sini region
+
     # one grid node should get one value; at nodes shared by several regions the more strongly doped region wins
-    best = fill(-1.0, num_nodes(grid)) # vector with n times -1
+    best = fill(-2.0, num_nodes(grid)) # vector with n times -1
     for icell in eachindex(cellregions)
         for inode in axes(cellnodes, 1) # all local node numbers of the cell (rows), node visited once per cell (so several times and update if doping is higher)
             node = cellnodes[inode, icell]
