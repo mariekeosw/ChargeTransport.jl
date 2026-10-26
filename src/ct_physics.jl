@@ -784,8 +784,6 @@ function poisson_flux!(f, u, edge, data)
         displacementFlux!(f, u, edge, data, 1)
     elseif edge.region ∈ data.params.regionsPoisson && edge.region ∉ data.params.regionsContinuity
         displacementFlux!(f, u, edge, data, 1)
-    elseif edge.region ∉ data.params.regionsPoisson && edge.region ∉ data.params.regionsContinuity
-        # no flux at all
     else
         error("flux!: region must be in regionsPoisson (with or without regionsContinuity).")
     end
@@ -797,7 +795,7 @@ end
 function flux!(f, u, edge, data, ::Type{OutOfEquilibrium})
 
 
-    if edge.region ∈ data.params.regionsContinuity && node.region ∈ data.params.regionsPoisson
+    if edge.region ∈ data.params.regionsContinuity && edge.region ∈ data.params.regionsPoisson
 
         # discretization of the displacement flux (LHS of Poisson equation)
         displacementFlux!(f, u, edge, data)
@@ -807,7 +805,7 @@ function flux!(f, u, edge, data, ::Type{OutOfEquilibrium})
             chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
         end
 
-    elseif edge.region ∈ data.params.regionsPoisson && node.region ∉ data.params.regionsContinuity
+    elseif edge.region ∈ data.params.regionsPoisson && edge.region ∉ data.params.regionsContinuity
 
         # discretization of the displacement flux (LHS of Poisson equation)
         displacementFlux!(f, u, edge, data)

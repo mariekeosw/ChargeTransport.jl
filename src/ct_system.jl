@@ -1800,10 +1800,12 @@ Function which calculates the equilibrium solution in case of non-present fluxes
 
 """
 
-function equilibrium_solve!(ctsys::System; control = VoronoiFVM.NewtonControl(), verbose::Bool = false)
-
-    return _equilibrium_solve_poisson!(ctsys::System; control = control, verbose = verbose)
-
+function equilibrium_solve!(
+        ctsys::System; control = VoronoiFVM.NewtonControl(),
+        psi0Values = electroNeutralSolutionBisection(ctsys), # calculated if not provided
+        verbose::Bool = false
+    )
+    return _equilibrium_solve_poisson!(ctsys; control, psi0Values, verbose)
 end
 
 """
@@ -1814,14 +1816,15 @@ Alternative base implementation of equilibrium_solve: poissonOnly = true
 
 """
 
-function _equilibrium_solve_poisson!(ctsys::System; control = control, verbose = verbose)
+function _equilibrium_solve_poisson!(ctsys; control, psi0Values, verbose)
 
     grid = ctsys.fvmsys.grid
     data = ctsys.fvmsys.physics.data
     params = ctsys.fvmsys.physics.data.params
-    paramsnodal = ctsys.fvmsys.physics.data.paramsnodal
     bnode = grid[BFaceNodes]
     ipsi = data.index_psi
+    iphin = data.bulkRecombination.iphin # integer index of φ_n
+    iphip = data.bulkRecombination.iphip # integer index of φ_p
     (; k_B, q) = data.constants
 
     # We set zero voltage for each charge carrier at all outer boundaries for equilibrium calculations.
@@ -1832,38 +1835,31 @@ function _equilibrium_solve_poisson!(ctsys::System; control = control, verbose =
     #---------------------------------------------------------------------------------------
     # This part is different to the other approach
     #---------------------------------------------------------------------------------------
-    # Calculate psi0 via Bisection method
-    psi0 = electroNeutralSolutionBisection(ctsys) # new function
+    insulatingRegions = setdiff(params.regionsPoisson, params.regionsContinuity)
 
-    # This is now handled within electroNeutralSolutionBisection(ctsys)
-    # Store psi0 for all boundary faces in params.bψEQ
-    #bfaceregions = grid[BFaceRegions]
-    #for ibface in 1:ExtendableGrids.num_bfaces(grid)
-    #    ibreg = bfaceregions[ibface]
-    #    @show ibreg
-    #    params.bψEQ[ibreg] = psi0[bnode[1, ibface]]
-    #    @show psi0[bnode[1, ibface]]
-    #end
+    # doping per region
+    dopingAbs = zeros(num_cellregions(grid))
+    for ireg in 1:num_cellregions(grid)
+        if ireg in insulatingRegions
+            dopingAbs[ireg] = -1.0
+        else
+            dopingAbs[ireg] = abs(params.doping[iphin, ireg] - params.doping[iphip, ireg])
+        end
+    end
 
-    # das kann ich doch vereinfachen
-    # ich brauche das ja nur für die ohmischen kontakte
-    # das würde ich gerne manual machen
-
-    # boundary region 2, reion 4, p kontakt
-    #params.bψEQ[2] = psi0[4]
-    #params.bψEQ[x] = psi0[4] # das ist die neue boundry regions für oben
-
-    # boundary region 3, reion 8, n kontakt
-    #params.bψEQ[3] = psi0[8]
-    #params.bψEQ[x] = psi0[3] # das ist die neue boundry regions für oben
-
-    #-> das muss aber schon in electroNeutralSolutionBisection() passieren weil da ist psi(0) ja nur abhängig von regions
+    # electroneutral solution per node -> initial value
+    cellnodes, cellregions = grid[CellNodes], grid[CellRegions]
+    psi0Vector = zeros(num_nodes(grid)) # size of \psi0
+    for ireg in sortperm(dopingAbs) # ascending: the strongest doping is written last
+        nodes = unique(cellnodes[:, cellregions .== ireg]) # no duplicates
+        psi0Vector[nodes] .= psi0Values[ireg]
+    end
 
     # We use a smaller system with N unknowns for the equilibrium solution
     eqsys = poisson_system(ctsys)  # new function
 
     inival = VoronoiFVM.unknowns(eqsys)
-    inival[1, :] .= psi0
+    inival[1, :] .= psi0Vector # this initial estimate is particularly well-suited for heavily doped regions
 
     # Solution for the small system
     eqsol = VoronoiFVM.solve(eqsys; inival = inival, control = control)
@@ -1876,15 +1872,15 @@ function _equilibrium_solve_poisson!(ctsys::System; control = control, verbose =
     # calculate equilibrium densities (especially needed for Schottky boundary conditions)
     for icc in data.electricCarrierList
         for ibreg in grid[BFaceRegions]
-            Ncc = params.bDensityOfStates[icc, ibreg] + paramsnodal.densityOfStates[icc, bnode[ibreg]]
-            Ecc = params.bBandEdgeEnergy[icc, ibreg] + paramsnodal.bandEdgeEnergy[icc, bnode[ibreg]]
+            Ncc = params.bDensityOfStates[icc, ibreg]
+            Ecc = params.bBandEdgeEnergy[icc, ibreg]
 
             eta = params.chargeNumbers[icc] / (k_B * params.temperature / q) * ((sol[icc, bnode[ibreg]] - sol[ipsi, bnode[ibreg]]) + Ecc / q)
             params.bDensityEQ[icc, ibreg] = Ncc * data.F[icc](eta)
         end
     end
 
-    # set now calculationType to outOfEquilibrium for further calculations
+    # set now calculationType to OutOfEquilibrium for further calculations
     data.calculationType = OutOfEquilibrium
 
     ## this flag is needed, when the user e.g. defines customized contactVoltageFunctions
@@ -1992,6 +1988,7 @@ the Poisson equation equal to zero and solving for ``\\psi``.
 The charge carriers may obey different statistics functions.
 Currently, this one is not well tested for the case of charge carriers beyond electrons and holes.
 """
+# Umbenennung zu Bolzmann?
 function electroNeutralSolution(ctsys)
 
     grid = ctsys.fvmsys.grid
@@ -2059,73 +2056,28 @@ function electroNeutralSolutionBisection(ctsys)
     (; q) = data.constants
 
     params = data.params
-    iphin = data.bulkRecombination.iphin # integer index of φ_n for doping
-    iphip = data.bulkRecombination.iphip # integer index of φ_p for doping
 
     # ! What would be a better guess here?
     a = -(2 * maximum(params.bandEdgeEnergy)) / q
     b = (2 * maximum(params.bandEdgeEnergy)) / q
 
     # storage for psi0
-    psi0Vector = zeros(num_nodes(grid))
     psi0Values = zeros(num_cellregions(grid))
-    cellnodes = grid[CellNodes] # matrix: each column describes one cell
-    cellregions = grid[CellRegions]
-
-    dopingAbs = zeros(num_cellregions(grid))
-
-    # solve roots problem for every region separated
-    #for ireg in 1:num_cellregions(grid)
-    #    psi0Values[ireg] = find_zero(ψ -> rhs_poisson_region(ctsys, ireg, ψ), (a, b), Roots.Bisection())
-    #    dopingAbs[ireg] = abs(params.doping[iphin, ireg] - params.doping[iphip, ireg]) # doping strength
-    #end
 
     # insulating regions: no mobile charge, no doping -> electroneutral potential undefined
     insulatingRegions = setdiff(params.regionsPoisson, params.regionsContinuity)
 
     for ireg in 1:num_cellregions(grid)
-
         if ireg in insulatingRegions
-            @show ireg
-            # arbitrary but reasonable guess 0, dopingAbs = -1 so that any semiconductor region
-            # wins at shared (interface) nodes, see the node loop below.
             psi0Values[ireg] = 0.0
-            dopingAbs[ireg] = -1.0
         else
             # solve roots problem for every region separated
             psi0Values[ireg] = find_zero(ψ -> rhs_poisson_region(ctsys, ireg, ψ), (a, b), Roots.Bisection())
-            dopingAbs[ireg] = abs(params.doping[iphin, ireg] - params.doping[iphip, ireg])
-        end
-
-    end
-
-    # we set bψEQ manually here, ist aber sehr hard-coded!!!
-    # !!! needs to be changed !!!
-    # boundary region 2,4,6 and value from region 4, p kontakt
-    params.bψEQ[2] = psi0Values[4] # dirichlet next to p-doped region
-    params.bψEQ[4] = psi0Values[4] # dirichlet next to air region
-    params.bψEQ[6] = psi0Values[4] # dirichlet next to sini region
-
-    # boundary regions 3,5,7 and value from region 8, n kontakt
-    params.bψEQ[3] = psi0Values[8] # dirichlet next to p-doped region
-    params.bψEQ[5] = psi0Values[8] # dirichlet next to air region
-    params.bψEQ[7] = psi0Values[8] # dirichlet next to sini region
-
-    # one grid node should get one value; at nodes shared by several regions the more strongly doped region wins
-    best = fill(-2.0, num_nodes(grid)) # vector with n times -1
-    for icell in eachindex(cellregions)
-        for inode in axes(cellnodes, 1) # all local node numbers of the cell (rows), node visited once per cell (so several times and update if doping is higher)
-            node = cellnodes[inode, icell]
-            ireg = cellregions[icell]
-            # ! This needs to be adjusted for nodal doping, so far just region-wise doping
-            if dopingAbs[ireg] > best[node] # tests weather there is doping
-                best[node] = dopingAbs[ireg]
-                psi0Vector[node] = psi0Values[ireg]
-            end
         end
     end
 
-    return psi0Vector
+    return psi0Values
+
 end
 
 """
