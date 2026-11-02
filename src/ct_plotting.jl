@@ -722,6 +722,7 @@ function plot_IV!(visualizer, biasValues, IV, title, ; plotGridpoints = false)
         color = :blue,
         markershape = marker,
         markersize = 8,
+        markevery = 1,
         title = title,
         xlabel = L"\text{bias [V]}",
         ylabel = L"\text{total current [A]}"
