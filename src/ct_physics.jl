@@ -1025,7 +1025,7 @@ function chargeCarrierFlux!(f, u, edge, data, icc, ::Type{DiffusionEnhanced})
 
     etak, etal = etaFunction!(u, edge, data, icc) # calls etaFunction!(u, edge::VoronoiFVM.Edge, data, icc)
 
-    if (log(data.F[icc](etal)) - log(data.F[icc](etak))) ≈ 0.0 # regularization idea coming from Pietra-Jüngel scheme
+    if abs(log(data.F[icc](etal)) - log(data.F[icc](etak))) < 1.0e-12 # regularization idea coming from Pietra-Jüngel scheme
         gk = exp(etak) / data.F[icc](etak)
         gl = exp(etal) / data.F[icc](etal)
         g = 0.5 * (gk + gl)
@@ -1064,7 +1064,7 @@ function chargeCarrierFlux!(f, u, edge, data, icc, ::Type{DiffusionEnhancedModif
 
     etak, etal = etaFunction!(u, edge, data, icc) # calls etaFunction!(u, edge::VoronoiFVM.Edge, data, icc)
 
-    if (log(data.F[icc](etal)) - log(data.F[icc](etak))) ≈ 0.0 # regularization idea coming from Pietra-Jüngel scheme
+    if abs(log(data.F[icc](etal)) - log(data.F[icc](etak))) < 1.0e-12 # regularization idea coming from Pietra-Jüngel scheme
         gk = exp(etak) / data.F[icc](etak)
         gl = exp(etal) / data.F[icc](etal)
         g = 0.5 * (gk + gl)
