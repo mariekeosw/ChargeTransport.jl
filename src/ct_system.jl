@@ -91,33 +91,6 @@ end
 ###########################################################
 ###########################################################
 
-"""
-$(TYPEDEF)
-
-A struct holding all information necessary on the quantum charge carriers which are
-the index of the charge carrier and the respective region in which they are defined.
-This struct along with all information necessary will be stored in an Array quantumCarrierList.
-
-$(TYPEDFIELDS)
-
-"""
-
-mutable struct QuantumCarrier
-
-    """
-    Index for data construction of quantum charge carrier
-    """
-    quantumCarrier::Int64
-
-    """
-    Corresponding regions where the quantum charge carrier is assumed to be present.
-    """
-    regions::Array{Int64, 1}
-
-    QuantumCarrier() = new()
-
-end
-
 
 """
 $(TYPEDEF)
@@ -144,6 +117,33 @@ mutable struct IonicCarrier
     regions::Array{Int64, 1}
 
     IonicCarrier() = new()
+
+end
+
+"""
+$(TYPEDEF)
+
+A struct holding all information necessary on the quantum charge carriers which are
+the index of the charge carrier and the respective region in which they are defined.
+This struct along with all information necessary will be stored in an Array quantumCarrierList.
+
+$(TYPEDFIELDS)
+
+"""
+
+mutable struct QuantumCarrier
+
+    """
+    Index for data construction of quantum charge carrier
+    """
+    quantumCarrier::Int64
+
+    """
+    Corresponding regions where the quantum charge carrier is assumed to be present.
+    """
+    regions::Array{Int64, 1}
+
+    QuantumCarrier() = new()
 
 end
 
@@ -179,14 +179,14 @@ function enable_quantum_carrier!(data; quantumCarrier::Int64, regions::Array{Int
 
     enableQuantum = QuantumCarrier()
 
-    enableQuantum.quantumCarrier = quantum.Carrier
-    enableIons.regions = regions
+    enableQuantum.quantumCarrier = quantumCarrier
+    enableQuantum.regions = regions
 
     # for now I choosed FermiDiracOneHalfBednarczyk
     # we would need to somehow add F0 statistics here
     data.F[quantumCarrier] = FermiDiracOneHalfBednarczyk
 
-    push!(data.quantumCarrierList, enableIons)
+    push!(data.quantumCarrierList, enableQuantum)
 
     return
 
@@ -1800,7 +1800,7 @@ function _equilibrium_solve_poisson!(ctsys; control, psi0Values, verbose)
     eqsol = VoronoiFVM.solve(eqsys; inival = inival, control = control)
 
     # Extend the solution to the full 3N system
-    sol = VoronoiFVM.unknowns(ctsys.fvmsys, inival = 0.0)   # φn = φp = 0
+    sol = VoronoiFVM.unknowns(ctsys.fvmsys, inival = 0.0)   # φn = φp = 0, if quantum species are active also φbn = φbp = 0
     sol[ipsi, :] .= eqsol[1, :]
     #---------------------------------------------------------------------------------------
 

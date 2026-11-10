@@ -471,8 +471,8 @@ function addRecombination!(f, u, node, data)
     iphip = data.bulkRecombination.iphip
 
     # based on user index and regularity of solution quantities or integers are used and depicted here
-    iphin = data.chargeCarrierList[iphin]
-    iphip = data.chargeCarrierList[iphip]
+    iphin = data.chargeCarrierList[iphin] # free electrons
+    iphip = data.chargeCarrierList[iphip] # free holes
 
     n = get_density!(u, node, data, iphin)
     p = get_density!(u, node, data, iphip)
@@ -498,6 +498,48 @@ function addRecombination!(f, u, node, data)
     ###########################################################
     f[iphin] = q * params.chargeNumbers[iphin] * kernel * excessDensTerm
     f[iphip] = q * params.chargeNumbers[iphip] * kernel * excessDensTerm
+    return nothing
+end
+
+# analog for the quantum carriers - Achtung hard-coded
+function addRecombinationQuantumCarriers!(f, u, node, data)
+
+    params = data.params
+    ireg = node.region
+    (; q, k_B) = data.constants
+
+    # indices (∈ IN) of electron and hole quasi Fermi potentials used by user (passed through recombination)
+    iphin = data.bulkRecombination.iphin # because we use dummy values for now, we just use the values from the free electrons and holes
+    iphip = data.bulkRecombination.iphip
+
+    # based on user index and regularity of solution quantities or integers are used and depicted here
+    iphin = data.chargeCarrierList[iphin] # free electrons
+    iphip = data.chargeCarrierList[iphip] # free holes
+
+    n = get_density!(u, node, data, iphin)
+    p = get_density!(u, node, data, iphip)
+
+    taun = params.recombinationSRHLifetime[iphin, ireg]
+    n0 = params.recombinationSRHTrapDensity[iphin, ireg]
+    taup = params.recombinationSRHLifetime[iphip, ireg]
+    p0 = params.recombinationSRHTrapDensity[iphip, ireg]
+
+    exponentialTerm = exp((q * u[3] - q * u[4]) / (k_B * data.params.temperature)) # iphibn = 3, iphibp = 4, not yet part of ChargeTransport, thus hard-coded for now
+    excessDensTerm = n * p * (1.0 - exponentialTerm)
+
+    # calculate recombination kernel. If user adjusted Auger, radiative or SRH recombination,
+    # they are set to 0. Hence, adding them here, has no influence since we simply add by 0.0.
+    kernelRad = params.recombinationRadiative[ireg]
+    kernelAuger = (params.recombinationAuger[iphin, ireg] * n + params.recombinationAuger[iphip, ireg] * p)
+    kernelSRH = params.prefactor_SRH / (taup * (n + n0) + taun * (p + p0))
+    kernel = kernelRad + kernelAuger + kernelSRH
+
+    ###########################################################
+    ####       right-hand side of continuity equations     ####
+    ####       for φ_n and φ_p (bipolar reaction)          ####
+    ###########################################################
+    f[3] = q * params.chargeNumbers[3] * kernel * excessDensTerm # iphibn = 3, iphibp = 4, not yet part of ChargeTransport, thus hard-coded for now
+    f[4] = q * params.chargeNumbers[4] * kernel * excessDensTerm # iphibn = 3, iphibp = 4, not yet part of ChargeTransport, thus hard-coded for now
     return nothing
 end
 
@@ -579,7 +621,7 @@ the space charge density.
 """
 function RHSPoisson!(f, u, node, data, ipsi)
 
-    # electrons and holes entering right hand-side of Poisson in each layer
+    # free electrons and holes entering right hand-side of Poisson in each layer
     for icc in data.electricCarrierList          # Array{Int64, 1}
 
         icc = data.chargeCarrierList[icc]   # Array{QType, 1}
@@ -588,6 +630,20 @@ function RHSPoisson!(f, u, node, data, ipsi)
         f[ipsi] = f[ipsi] - data.params.chargeNumbers[icc] * (data.params.doping[icc, node.region])  # subtract doping
         f[ipsi] = f[ipsi] + data.params.chargeNumbers[icc] * ncc   # add charge carrier
 
+    end
+
+    # bounded electrons and holes entering right hand-side of Poisson in each layer
+    for iicc in data.quantumCarrierList
+        # add quantum carriers only in defined regions
+        if node.region ∈ iicc.regions
+
+            icc = iicc.quantumCarrier # [3,4]
+            icc = data.chargeCarrierList[icc] # all carriers, in our case [1,2,3,4]
+            ncc = get_density!(u, node, data, icc)
+
+            f[ipsi] = f[ipsi] - data.params.chargeNumbers[icc] * (data.params.doping[icc, node.region])  # subtract doping
+            f[ipsi] = f[ipsi] + data.params.chargeNumbers[icc] * ncc   # add charge carrier
+        end
     end
 
     f[ipsi] = - data.constants.q * f[ipsi]
@@ -603,10 +659,11 @@ function RHSContinuityEquations!(f, u, node, data)
 
     # dependent on user information concerning recombination
     if data.bulkRecombination.bulk_recomb
-        addRecombination!(f, u, node, data)
+        addRecombination!(f, u, node, data) # free electrons and holes
+        addRecombinationQuantumCarriers!(f, u, node, data) # bounded electrons and holes
     end
 
-    # not needed for now?
+    # add/ substract qS_n/ qS_p, but S not yet implemented
     # dependent on user information concerning trap dynamics
     #addTrapCaptureEscape!(f, u, node, data)
     # dependent on user information concerning laser model
@@ -642,7 +699,7 @@ function reaction!(f, u, node, data, ::Type{OutOfEquilibrium})
         RHSPoisson!(f, u, node, data, ipsi)
 
         # First, set RHS to zero for all icc - why do we need that?
-        for icc in eachindex(data.chargeCarrierList) # Array{Int61, 1}
+        for icc in eachindex(data.chargeCarrierList) # Array{Int61, 1}, all chargeCarriers (also quantum carriers)
             icc = data.chargeCarrierList[icc]   # Array{QType, 1}
             f[icc] = 0.0
         end
@@ -801,7 +858,12 @@ function flux!(f, u, edge, data, ::Type{OutOfEquilibrium})
         displacementFlux!(f, u, edge, data)
 
         # discretization of the carrier fluxes
-        for icc in data.electricCarrierList
+        for icc in data.electricCarrierList # free electrons and holes, icc = 1,2
+            chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
+        end
+
+        for icc in data.quantumCarrierList
+            icc = icc.quantum.Carrier # bounded electrons and holes, icc = 3,4
             chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
         end
 
