@@ -863,7 +863,7 @@ function flux!(f, u, edge, data, ::Type{OutOfEquilibrium})
         end
 
         for icc in data.quantumCarrierList
-            icc = icc.quantum.Carrier # bounded electrons and holes, icc = 3,4
+            icc = icc.quantumCarrier # bounded electrons and holes, icc = 3,4
             chargeCarrierFlux!(f, u, edge, data, icc, data.fluxApproximation[icc])
         end
 
