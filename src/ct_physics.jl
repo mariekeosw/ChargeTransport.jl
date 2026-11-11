@@ -543,6 +543,36 @@ function addRecombinationQuantumCarriers!(f, u, node, data)
     return nothing
 end
 
+# capture of free carriers into the QW (escape is the negative part), hard-coded 1↔3, 2↔4 like the rest
+function addCaptureEscapeQuantumCarriers!(f, u, node, data)
+
+    (; q, k_B) = data.constants
+    kT = k_B * data.params.temperature
+
+    iphin = data.bulkRecombination.iphin
+    iphip = data.bulkRecombination.iphip
+    zn = data.params.chargeNumbers[iphin]
+    zp = data.params.chargeNumbers[iphip]
+
+    n = get_density!(u, node, data, data.chargeCarrierList[iphin])
+    p = get_density!(u, node, data, data.chargeCarrierList[iphip])
+
+    τ_cap_n = 1.0e-12  # s, capture time (later: data.params field)
+    τ_cap_p = 1.0e-12
+
+    # > 0: free → bound (capture), < 0: bound → free (escape); zero if φ_free == φ_bound
+    Scap_n = n / τ_cap_n * (1.0 - exp(zn * q * (u[3] - u[iphin]) / kT))
+    Scap_p = p / τ_cap_p * (1.0 - exp(zp * q * (u[4] - u[iphip]) / kT))
+
+    # same sign convention as addRecombination!: q * z * R removes carriers
+    # the sign seems to be flipped, but I am just using the VoronoiFVM convention: \nabla j + r(u) = 0
+    f[iphin] += q * zn * Scap_n   # free electrons lost, zn = -1
+    f[3] -= q * zn * Scap_n   # bounded electrons gained, zn = -1
+    f[iphip] += q * zp * Scap_p   # free holes gain, zp = 1
+    f[4] -= q * zp * Scap_p   # bounded holes lost, zp = 1
+    return nothing
+end
+
 function addStimulatedRecombination!(f, u, node, data, ::Type{LaserModelOff})
     return nothing
 end
@@ -660,7 +690,10 @@ function RHSContinuityEquations!(f, u, node, data)
     # dependent on user information concerning recombination
     if data.bulkRecombination.bulk_recomb
         addRecombination!(f, u, node, data) # free electrons and holes
-        addRecombinationQuantumCarriers!(f, u, node, data) # bounded electrons and holes
+        if any(node.region ∈ iicc.regions for iicc in data.quantumCarrierList)
+            addRecombinationQuantumCarriers!(f, u, node, data) # bounded electrons and holes
+            addCaptureEscapeQuantumCarriers!(f, u, node, data) # free ↔ bounded
+        end
     end
 
     # add/ substract qS_n/ qS_p, but S not yet implemented
