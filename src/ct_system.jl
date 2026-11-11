@@ -1381,22 +1381,23 @@ function build_system(grid, data, ::Type{ContQF}; kwargs...)
     num_species_sys = data.params.numberOfCarriers + 1
     data.index_psi = num_species_sys
 
-    ionicCarrierListHelp = Int64[]
     quantumCarrierListHelp = Int64[]
 
-    # store indices of ionic carriers
-    for iicc in data.ionicCarrierList
-        push!(ionicCarrierListHelp, iicc.ionicCarrier)
-    end
+    # store indices of quantum carriers
     for iicc in data.quantumCarrierList
         push!(quantumCarrierListHelp, iicc.quantumCarrier)
     end
 
-    # put all non-ionic and non-quantum carriers present in the continuity regions
+    # put all non-quantum carriers present in the continuity regions
     for icc in data.chargeCarrierList
-        if (icc ∉ ionicCarrierListHelp) && (icc ∉ quantumCarrierListHelp)
+        if (icc ∉ quantumCarrierListHelp)
             enable_species!(ctsys, icc, data.params.regionsContinuity)
         end
+    end
+
+    # put quantum carriers present in QW region
+    for iicc in data.quantumCarrierList
+        enable_species!(ctsys, iicc.quantumCarrier, iicc.regions)
     end
 
     # enable lastly the electric potential on whole domain
@@ -1456,116 +1457,6 @@ function build_system(grid, data, ::Type{ContQF}; kwargs...)
 
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-The core of the system constructor. Here, the system for discontinuous quasi Fermi potentials is build.
-
-"""
-function build_system(grid, data, ::Type{DiscontQF}; kwargs...)
-
-    #################################################################################
-    ##### Set the recombinations parameters correctly based on user information #####
-
-    # put Auger, radiative and SRH recombination on or off (based on user information)
-    if data.bulkRecombination.bulk_recomb_Auger == false
-        data.params.recombinationAuger .= 0.0
-    end
-
-    if data.bulkRecombination.bulk_recomb_radiative == false
-        data.params.recombinationRadiative .= 0.0
-    end
-
-    if data.bulkRecombination.bulk_recomb_SRH == SRHOff
-        data.params.prefactor_SRH = 0.0
-        # need to define at least one entry within each region to be non-zero. Otherwise get a NaN expression in reaction.
-        for ireg in 1:grid[NumCellRegions]
-            data.params.recombinationSRHTrapDensity[1, ireg] = 1.0
-            data.params.recombinationSRHLifetime[1, ireg] = 1.0
-        end
-    end
-
-    #################################################################################
-    ##### Set carrier lists correctly based on user information #####
-
-    fvmsys = VoronoiFVM.System(grid; kwargs...)
-
-    #########################################
-    # electrons and holes
-    iphin = data.bulkRecombination.iphin # integer index of φ_n
-    iphip = data.bulkRecombination.iphip # integer index of φ_p
-
-    data.chargeCarrierList[iphin] = DiscontinuousQuantity(fvmsys, 1:data.params.numberOfRegions, id = iphin)
-    data.chargeCarrierList[iphip] = DiscontinuousQuantity(fvmsys, 1:data.params.numberOfRegions, id = iphip)
-    data.electricCarrierList = [iphin, iphip]
-
-    #########################################
-    # if ionic carriers are present
-    for icc in data.ionicCarrierList
-        enable_species!(ctsys, icc.ionicCarrier, icc.regions)
-    end
-    # if quantum carriers are present
-    for icc in data.quantumCarrierList
-        enable_species!(ctsys, icc.quantumCarrier, icc.regions)
-    end
-
-    #########################################
-    data.index_psi = ContinuousQuantity(fvmsys, 1:data.params.numberOfRegions)
-
-    #########################################
-    # Fill in boundary parameters. By default, we set the boundary values the same as the adjacent inner cell.
-    for ibreg in 1:data.params.numberOfBoundaryRegions
-        ibregIndex = findfirst(==(ibreg), grid[BFaceRegions]) # index of first b face with boundary region ibreg
-
-        # as alternative, one could have:
-        # ibface = grid[BFaceFaces][ibregIndex] # general face number of boundary face
-        # icell = grid[FaceCells][1, ibface] # adjacent cell, by default the first entry is non-zero
-        icell = grid[ExtendableGrids.BFaceCells][1, ibregIndex] # adjacent cell, by default the first entry is non-zero
-
-        ireg = grid[CellRegions][icell] # region number to which the cell belongs
-
-        for icc in data.chargeCarrierList # do it for each charge carrier
-            if iszero(data.paramsnodal.densityOfStates[icc, :]) && isone(data.params.bDensityOfStates[icc, ibreg]) # only fill in boundary values, if user did not implement nodal variant
-                data.params.bDensityOfStates[icc, ibreg] = data.params.densityOfStates[icc, ireg]
-            end
-
-            if iszero(data.paramsnodal.bandEdgeEnergy[icc, :]) && iszero(data.params.bBandEdgeEnergy[icc, ibreg])
-                data.params.bBandEdgeEnergy[icc, ibreg] = data.params.bandEdgeEnergy[icc, ireg]
-            end
-
-            if iszero(data.paramsnodal.doping) && iszero(data.params.bDoping[icc, ibreg])
-                data.params.bDoping[icc, ibreg] = data.params.doping[icc, ireg]
-            end
-        end
-
-    end
-
-    #########################################
-    # DA: Note that Schottky barrier lowering is for the discontinuous case not implemented yet.
-
-    #################################################################################
-    #####                 Build system for VoronoiFVM                           #####
-
-    physics = VoronoiFVM.Physics(
-        data = data,
-        flux = flux!,
-        reaction = reaction!,
-        breaction = breaction!,
-        storage = storage!,
-        bstorage = bstorage!,
-        bflux = bflux!
-    )
-
-    # add the defined physics to system
-    physics!(fvmsys, physics)
-
-    ctsys = System()
-    ctsys.fvmsys = fvmsys
-    ctsys.data = data
-
-    return ctsys
-
-end
 
 """
 $(TYPEDSIGNATURES)
