@@ -1120,8 +1120,8 @@ function chargeCarrierFlux!(f, u, edge, data, icc, ::Type{DiffusionEnhanced})
 
     etak, etal = etaFunction!(u, edge, data, icc) # calls etaFunction!(u, edge::VoronoiFVM.Edge, data, icc)
 
-    if abs(log(data.F[icc](etal)) - log(data.F[icc](etak))) < 1.0e-12 # regularization idea coming from Pietra-Jüngel scheme
-        gk = exp(etak) / data.F[icc](etak)
+    if abs(etal - etak) < 1.0e-12 # TODO 1.0e-5?? regularization idea coming from Pietra-Jüngel scheme, second order taylor exp?
+        gk = exp(etak) / data.F[icc](etak) # arithmetischen mean etal, etak; F/F'(\eta)
         gl = exp(etal) / data.F[icc](etal)
         g = 0.5 * (gk + gl)
     else

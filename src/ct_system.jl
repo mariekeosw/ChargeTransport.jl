@@ -1463,7 +1463,7 @@ $(TYPEDSIGNATURES)
 
 System constructor for the poisson system. This system is used within the alternative base implementation of equilibrium_solve, where poissonOnly = true.
 
-    """
+"""
 function poisson_system(ctsys; kwargs...)
 
     grid = ctsys.fvmsys.grid
@@ -1937,7 +1937,7 @@ function rhs_poisson_region(ctsys, ireg, ψ)
     Nv = params.densityOfStates[iphip, ireg]
     C = params.doping[iphin, ireg] - params.doping[iphip, ireg]   # N_D - N_A
 
-    return q * (Nv * data.F[iphip]((Ev - q * ψ) / (k_B * T)) - Nc * data.F[iphin]((q * ψ - Ec) / (k_B * T)) + C)
+    return q * (Nv * data.F[iphip]((Ev - q * ψ) / (k_B * T)) - Nc * data.F[iphin]((q * ψ - Ec) / (k_B * T)) + C) # TODO: here we need to add the quantum carriers also
 end
 
 ###########################################################
